@@ -21,6 +21,7 @@ import io
 import math
 import re
 from collections import Counter
+from collections.abc import Callable
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field, field_validator
@@ -128,6 +129,11 @@ PDF_PAGE_SOURCE_DEFINITION = AdapterSourceDefinition(_PDFAdapter(), projections=
 
 
 _FINANCIAL_QUERY_FILLER = frozenset([
+    "unadjusted",
+    "only",
+    "using",
+    "use",
+    "fiscal",
     "reported",
     "report",
     "materially",
@@ -206,6 +212,62 @@ def _pdf_query(question: str) -> dict[str, float]:
     return weighted
 
 
+def _pdf_facet_rankings(
+    question: str, headings: list[str], score: Callable[[int, dict[str, float]], float]
+) -> list[list[int]]:
+    facets: list[tuple[str, str]] = []
+    if re.search(r"ebitda|income|profit|revenue|sales|earnings|margin", question, re.IGNORECASE):
+        facets.append((
+            "consolidated statement income earnings operating revenue sales",
+            r"(?:consolidated\s+)?statements?\s+of\s+(?:income|earnings|operations)",
+        ))
+    if re.search(r"ebitda|cash\s*flow|capex|capital expenditure|depreciation|amortization", question, re.IGNORECASE):
+        facets.append((
+            "cash flows operating depreciation amortization capital expenditures purchases property plant equipment",
+            r"(?:consolidated\s+)?statements?\s+of\s+cash\s*flows",
+        ))
+    if re.search(r"balance sheet|assets|liabilities|working capital|\bdebt\b|borrowings", question, re.IGNORECASE):
+        facets.append((
+            "consolidated balance sheets assets liabilities debt equity",
+            r"(?:consolidated\s+)?balance\s+sheets?|statements?\s+of\s+financial\s+position",
+        ))
+    if re.search(r"geograph|countries|regions|operates|segments", question, re.IGNORECASE):
+        facets.append((
+            "geographic geographical business reportable segments divisions international countries regions",
+            r"(?:our\s+)?(?:business|divisions)|geograph|reportable\s+segments|segment\s+(?:information|results)",
+        ))
+    if re.search(r"legal|litigation|lawsuit|proceedings", question, re.IGNORECASE):
+        facets.append((
+            "legal proceedings litigation lawsuits contingencies matters claims",
+            r"legal\s+(?:proceedings|matters)|commitments\s+and\s+contingencies|litigation",
+        ))
+    rankings = []
+    for query, heading in facets:
+        terms = dict.fromkeys(_pdf_terms(query), 1.0)
+        scores = [
+            score(index, terms) * (4.0 if re.search(heading, text) else 1.0) for index, text in enumerate(headings)
+        ]
+        rankings.append(
+            sorted(
+                (index for index, value in enumerate(scores) if value > 0), key=lambda index: (-scores[index], index)
+            )
+        )
+    return rankings
+
+
+def _pdf_fuse(primary: list[int], facets: list[list[int]]) -> list[int]:
+    fused = {index: 1 / (30 + rank) for rank, index in enumerate(primary)}
+    for component in facets:
+        for rank, index in enumerate(component):
+            fused[index] = fused.get(index, 0) + 0.8 / (30 + rank)
+    # Reserve a small result share for each requested statement component.
+    # Reciprocal fusion alone can still suppress a short statement whose
+    # vocabulary overlaps only one part of a long multi-part calculation.
+    anchors = list(dict.fromkeys(index for component in facets for index in component[:2]))
+    ranked = sorted(fused, key=lambda index: (-fused[index], index))
+    return anchors + [index for index in ranked if index not in anchors]
+
+
 async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[MemoryCitation, ...]:
     """Rank scoped, persisted pages with whole-corpus lexical statistics.
 
@@ -227,21 +289,25 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
     frequencies = [Counter(_pdf_terms(body or identifier)) for identifier, _, body in bodies]
     lengths = [sum(counts.values()) for counts in frequencies]
     average = sum(lengths) / len(lengths) or 1
-    document_frequency = Counter(term for counts in frequencies for term in weighted if term in counts)
+    document_frequency = Counter(term for counts in frequencies for term in counts)
     inverse = {
         term: math.log(1 + (len(frequencies) - document_frequency[term] + 0.5) / (document_frequency[term] + 0.5))
-        for term in weighted
+        for term in document_frequency
     }
     question_slug = re.sub(r"[^a-z0-9]", "", question.casefold())
     years = re.findall(r"(?:fy)?((?:19|20)\d{2})", question.casefold())
     requested_year = max(years, default="")
 
-    def score(index: int) -> float:
+    def score(index: int, terms: dict[str, float] = weighted) -> float:
         counts = frequencies[index]
         normalization = 1.2 * (0.45 + 0.55 * lengths[index] / average)
         lexical = sum(
-            weighted[term] * inverse[term] * counts[term] * 2.2 / (counts[term] + normalization)
-            for term in weighted
+            terms[term]
+            * inverse.get(term, math.log(1 + len(frequencies)))
+            * counts[term]
+            * 2.2
+            / (counts[term] + normalization)
+            for term in terms
             if counts[term]
         )
         identifier = bodies[index][0].casefold()
@@ -255,8 +321,12 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
         rank = native_rank.get((record.entry.entry_id, record.entry.entry_version_id))
         return lexical + (0 if rank is None else 0.1 / (rank + 1))
 
-    order = sorted(range(len(page.entries)), key=lambda index: (-score(index), index))
-    return tuple(page.entries[index].citation for index in order[:limit] if score(index) > 0)
-
-
-__all__ = ["PDF_PAGE_SOURCE_DEFINITION", "PDFDocumentInput", "PDFPageInput", "parse_pdf_document", "search_pdf_pages"]
+    # Fuse the complete question with independent financial statement components.
+    primary_scores = [score(index) for index in range(len(page.entries))]
+    primary = sorted(
+        (index for index, value in enumerate(primary_scores) if value > 0),
+        key=lambda index: (-primary_scores[index], index),
+    )
+    headings = [re.sub(r"\s+", " ", body[:1200]).casefold()[:600] for _, _, body in bodies]
+    order = _pdf_fuse(primary, _pdf_facet_rankings(question, headings, score))
+    return tuple(page.entries[index].citation for index in order[:limit])
