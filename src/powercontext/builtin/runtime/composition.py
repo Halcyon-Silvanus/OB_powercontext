@@ -84,6 +84,7 @@ from powercontext.builtin.persistence.dream_schema import ensure_dream_schema
 from powercontext.builtin.persistence.memory_index import CompositeMemoryIndex, MemoryIndex
 from powercontext.builtin.persistence.oceanbase.experience_index import OceanBaseExperienceFTSIndex
 from powercontext.builtin.persistence.oceanbase.memory_index import (
+    OceanBaseHybridMemoryIndex,
     OceanBaseMemoryFTSIndex,
     OceanBaseMemoryVectorIndex,
 )
@@ -779,6 +780,7 @@ def _artifact_processing_bindings(  # noqa: C901 - validate and assemble one reg
                 max_workers=getattr(config.runtime, f"{prefix}_max_workers"),
                 worker_timeout_seconds=getattr(config.runtime, f"{prefix}_worker_timeout_seconds"),
                 automatic_processing_interval=None if interval is None else timedelta(seconds=float(interval)),
+                source_count_threshold=getattr(config.runtime, f"{prefix}_source_count_threshold", None),
                 cron=config.runtime.profile_cron
                 if family == "profile" and config.runtime.profile_schedule_enabled
                 else None,
@@ -963,7 +965,9 @@ async def open_builtin_contexts(
     indexes = [OceanBaseMemoryFTSIndex()]
     if embedding_model is not None:
         indexes.append(OceanBaseMemoryVectorIndex(embedding_model.profile))
-    index = CompositeMemoryIndex(*indexes)
+    index = (
+        OceanBaseHybridMemoryIndex(*indexes) if isinstance(database, SeekDBConfig) else CompositeMemoryIndex(*indexes)
+    )
     topic_indexes: list[TopicMemoryIndex] = [OceanBaseTopicMemoryFTSIndex()]
     if embedding_model is not None:
         topic_indexes.append(OceanBaseTopicMemoryVectorIndex(embedding_model.profile))

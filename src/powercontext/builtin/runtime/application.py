@@ -249,6 +249,7 @@ from powercontext.builtin.runtime.recall_sufficiency import (
     build_recall_candidates,
     recall_effort,
 )
+from powercontext.builtin.runtime.source_lifecycle import SourceLifecycleApplication
 from powercontext.builtin.runtime.statistics import RelationalScopedStatistics, overview_selection
 from powercontext.builtin.scope import ScopeApplication, ScopeDescriptor, ScopeSelection
 from powercontext.builtin.scope.subject_sources import SubjectSourceService
@@ -2630,7 +2631,7 @@ class ScopedTopicMemoryApplication:
         self._runtime = runtime
         self.scope_id = validate_scope_id(scope_id)
 
-    async def search(
+    async def search(  # noqa: C901 - native recall and lifecycle eligibility
         self,
         request: SearchTopicMemoryRequest,
         /,
@@ -2651,6 +2652,10 @@ class ScopedTopicMemoryApplication:
         if len(set(analyze_text(query).split())) > MAX_TOPIC_MEMORY_QUERY_TERMS:
             raise InvalidRuntimeRequestError("topic-memory-query-terms")
 
+        requested_limit = request.limit
+        unavailable = await self._runtime.lifecycle.for_scope(self.scope_id).unavailable_topics()
+        if unavailable:
+            request = request.model_copy(update={"limit": MAX_TOPIC_MEMORY_SEARCH_LIMIT})
         used_fallback = False
         async with self._runtime._scoped_operation(
             self.scope_id,
@@ -2678,6 +2683,16 @@ class ScopedTopicMemoryApplication:
                     query_embedding,
                     embedding_timeout_seconds,
                 )
+        if unavailable:
+            result = result.model_copy(
+                update={
+                    "hits": tuple(
+                        hit
+                        for hit in result.hits
+                        if (hit.artifact_ref.artifact_id, hit.artifact_ref.revision) not in unavailable
+                    )[:requested_limit]
+                }
+            )
         observer = self._runtime._topic_memory_search_observer
         if observer is not None:
             try:
@@ -3120,6 +3135,7 @@ class BuiltinRuntime:
         self.handoff = HandoffApplication(self)
         self.work = WorkApplication(self)
         self.memory = MemoryApplication(self)
+        self.lifecycle = SourceLifecycleApplication(self, storage_available=remote_ingestion is not None)
         self.topic_memory = TopicMemoryApplication(self)
         self.records = RecordApplication(self)
         self.prompts = PromptApplication(self)

@@ -1202,7 +1202,7 @@ name = "importlib-metadata"
 version = "9.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "python_full_version < '3.12'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/01/15bb152d77b21318514a96f43af312635eb2500c96b55398d020c93d86ea/importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc", size = 56405, upload-time = "2026-03-20T06:42:56.999Z" }
 wheels = [
@@ -2369,8 +2369,8 @@ name = "opendalfs"
 version = "0.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "fsspec", marker = "python_full_version >= '3.12'" },
-    { name = "opendal", marker = "python_full_version >= '3.12'" },
+    { name = "fsspec" },
+    { name = "opendal" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0d/23/fdb4d34f08ac68a27b2d553256e13b15ce139916d36bab33f9a0e71e8770/opendalfs-0.1.0.tar.gz", hash = "sha256:5ceaeccc0852ef10c8ef2ce20e5927dbc18083909c06550ad36f81bcacb5774d", size = 75112, upload-time = "2026-08-26T05:30:33.497Z" }
 wheels = [
@@ -2727,6 +2727,9 @@ code = [
     { name = "tree-sitter-python" },
     { name = "tree-sitter-typescript" },
 ]
+pdf = [
+    { name = "pypdf" },
+]
 seekdb = [
     { name = "aiosqlite" },
     { name = "apscheduler" },
@@ -2775,7 +2778,7 @@ dev = [
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "langgraph" },
-    { name = "powercontext", extra = ["cli", "code", "server"] },
+    { name = "powercontext", extra = ["cli", "code", "pdf", "server"] },
     { name = "powercontext-langchain" },
     { name = "powercontext-langgraph" },
     { name = "prek" },
@@ -2849,6 +2852,7 @@ requires-dist = [
     { name = "pyobvector", marker = "extra == 'builtin'", specifier = ">=0.2.28,<0.3" },
     { name = "pyobvector", marker = "extra == 'seekdb'", specifier = ">=0.2.28,<0.3" },
     { name = "pyobvector", marker = "extra == 'server'", specifier = ">=0.2.28,<0.3" },
+    { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=6,<7" },
     { name = "pyyaml", marker = "extra == 'builtin'", specifier = ">=6,<7" },
     { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6,<7" },
     { name = "pyyaml", marker = "extra == 'client'", specifier = ">=6,<7" },
@@ -2871,7 +2875,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12,<5" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.34,<1" },
 ]
-provides-extras = ["builtin", "cli", "client", "code", "seekdb", "server", "tracing-otlp"]
+provides-extras = ["builtin", "cli", "client", "code", "pdf", "seekdb", "server", "tracing-otlp"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2881,6 +2885,7 @@ dev = [
     { name = "langgraph", specifier = ">=1.2,<2" },
     { name = "powercontext", extras = ["cli", "server"] },
     { name = "powercontext", extras = ["code"] },
+    { name = "powercontext", extras = ["pdf"] },
     { name = "powercontext-langchain", editable = "integrations/langchain" },
     { name = "powercontext-langgraph", editable = "integrations/langgraph" },
     { name = "prek", specifier = ">=0.2.0" },
@@ -2912,8 +2917,8 @@ name = "powercontext-connector-opendal"
 version = "0.0.1"
 source = { editable = "integrations/opendal" }
 dependencies = [
-    { name = "opendalfs", marker = "python_full_version >= '3.12'" },
-    { name = "powercontext", extra = ["client"], marker = "python_full_version >= '3.12'" },
+    { name = "opendalfs" },
+    { name = "powercontext", extra = ["client"] },
 ]
 
 [package.metadata]
@@ -3371,6 +3376,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e5/e7/397eaeab4d52126675a30bcbfe1b74b6f3d3512a9e714966a93f08f3da2e/pyobvector-0.2.28.tar.gz", hash = "sha256:d394d66f4a7dc97c221b7584e52b329e3fe61ed96b6f248d7360e3e5a53581ce", size = 81686, upload-time = "2026-06-05T06:42:41.593Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dd/a6/8acb9821c78bafc3ff9db5bbea05a8b67ff871b7590b7d25cc91c34fc2f0/pyobvector-0.2.28-py3-none-any.whl", hash = "sha256:36708fc0020307890b9001035904ff14719b81e20e58f2a97f7f3739dad53c72", size = 66637, upload-time = "2026-06-05T06:42:38.5Z" },
+]
+
+[[package]]
+name = "pypdf"
+version = "6.21.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/e1/ec8f4d155c997c45917153a5521e60d6ee6389d68abdcbc8e44e564caffc/pypdf-6.21.4.tar.gz", hash = "sha256:c8817e3f888d47a087872ded69812c1ef30cacb871d6e053e0c00bbaf0bc2163", size = 7109255, upload-time = "2026-10-28T17:00:54.81Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/4b/77e8ad4ac42c9d93600f40541a50e9feb3a61d2bbee2d76f659346072051/pypdf-6.21.4-py3-none-any.whl", hash = "sha256:33e4fb41ca352810eb4e9838aa0d82d6888a5f8bf682f43e99cce5faa666255c", size = 410430, upload-time = "2026-10-28T17:00:53.146Z" },
 ]
 
 [[package]]

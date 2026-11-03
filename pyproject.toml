@@ -37,6 +37,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+pdf = ["pypdf>=6,<7"]
 code = [
     "tree-sitter==0.26.0",
     "tree-sitter-go==0.25.0",
@@ -127,6 +128,7 @@ notebooks = [
     "playwright>=1.55,<2",
 ]
 dev = [
+    "powercontext[pdf]",
     "powercontext[code]",
     "datamodel-code-generator==0.64.0",
     "powercontext[cli,server]",
