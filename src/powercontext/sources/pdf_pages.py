@@ -55,6 +55,8 @@ class PDFPageInput(BaseModel):
     page_number: int = Field(gt=0, strict=True)
     text: str
 
+    _validate_document_id = field_validator("document_id")(PDFDocumentInput.validate_document_id.__func__)
+
 
 class PDFPageSource(Source):
     page: PDFPageInput
@@ -125,48 +127,136 @@ class _PDFProjection:
 PDF_PAGE_SOURCE_DEFINITION = AdapterSourceDefinition(_PDFAdapter(), projections=(_PDFProjection(),))
 
 
-async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[MemoryCitation, ...]:
-    """Collect native lexical candidates, then rank complete pages using BM25.
+_FINANCIAL_QUERY_FILLER = frozenset([
+    "reported",
+    "report",
+    "materially",
+    "important",
+    "ongoing",
+    "directly",
+    "outlined",
+    "explicitly",
+    "state",
+    "assuming",
+    "perspective",
+    "investment",
+    "analyst",
+    "details",
+    "shown",
+    "give",
+    "response",
+    "relying",
+    "calculate",
+    "calculation",
+    "define",
+    "answer",
+    "respond",
+    "question",
+    "primarily",
+    "quantity",
+    "percentage",
+    "change",
+    "percent",
+    "usd",
+    "million",
+    "millions",
+    "billion",
+    "billions",
+    "fy",
+])
 
-    Single-term searches complement the complete query so an informative rare
-    term is not lost to query-coverage admission. All returned identities come
-    from the caller's scoped Memory; no independent evidence store is used.
+
+def _pdf_terms(text: str) -> list[str]:
+    words = re.findall(r"[a-z]+|\d+", text.casefold())
+    normalized = []
+    for word in words:
+        if len(word) > 5 and word.endswith("ies"):
+            word = word[:-3] + "y"
+        elif len(word) > 5 and word.endswith("ing"):
+            word = word[:-3]
+        elif len(word) > 4 and word.endswith("es"):
+            word = word[:-2]
+        elif len(word) > 4 and word.endswith("s"):
+            word = word[:-1]
+        if len(word) > 4 and word.endswith("e"):
+            word = word[:-1]
+        normalized.append(word)
+    return normalized
+
+
+def _pdf_query(question: str) -> dict[str, float]:
+    content = analyze_fts_query(question)
+    words = [word for word in re.findall(r"[a-z]+|\d+", content.casefold()) if word not in _FINANCIAL_QUERY_FILLER]
+    weighted = {word: (0.12 if word.isdigit() else 1.0) for word in _pdf_terms(" ".join(words))}
+    expansions = (
+        (r"\bcapex\b|capital expenditure", "capital expenditures purchases property plant equipment"),
+        (r"\bebitda\b|\bd\s*&\s*a\b", "earnings operating income depreciation amortization"),
+        (r"income statement|\bp\s*&\s*l\b", "consolidated statements income earnings operations"),
+        (r"cash flow", "consolidated statements cash flows operating investing financing"),
+        (r"\blegal\b|litigation|lawsuit", "legal proceedings litigation contingencies claims"),
+        (r"geograph|\bcountries\b|\bregions\b", "geographic international countries regions operations segments"),
+        (r"\brevenue\b|\brevenues\b", "revenue revenues net sales"),
+        (r"\bprofit\b", "profit income earnings"),
+        (r"\bdebt\b", "debt borrowings obligations maturities"),
+    )
+    for pattern, expansion in expansions:
+        if re.search(pattern, question, re.IGNORECASE):
+            for word in _pdf_terms(expansion):
+                weighted.setdefault(word, 0.45)
+    return weighted
+
+
+async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[MemoryCitation, ...]:
+    """Rank scoped, persisted pages with whole-corpus lexical statistics.
+
+    Native search supplies initial relevance; the public Memory listing closes
+    candidate truncation gaps for long questions and tables using different
+    financial terminology. No secondary evidence store or external model is used.
     """
     if type(limit) is not int or limit < 1:
         raise ValueError("limit must be a positive integer")  # noqa: TRY003
-    terms = list(dict.fromkeys(re.findall(r"[a-z]+|\d+", analyze_fts_query(question).lower())))
-    if not terms:
+    weighted = _pdf_query(question)
+    if not weighted:
         return ()
-    candidates = {}
-    for query in dict.fromkeys([question, *terms]):
-        page = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=max(100, limit * 5)))
-        for hit in page.hits:
-            # ArtifactRef may be an unfrozen Pydantic model.
-            key = (hit.memory_ref.artifact_id, hit.memory_ref.revision, hit.entry_id, hit.entry_version_id)
-            candidates[key] = hit
-    if not candidates:
+    page = await memory.list()
+    if not page.entries:
         return ()
-    frequencies = {key: Counter(re.findall(r"[a-z]+|\d+", hit.text.lower())) for key, hit in candidates.items()}
-    lengths = {key: sum(counts.values()) for key, counts in frequencies.items()}
-    average = sum(lengths.values()) / len(lengths) or 1
-    document_frequency = Counter(term for counts in frequencies.values() for term in terms if term in counts)
+    native = await memory.search(SearchMemoryRequest(query=question, mode="fts", limit=100))
+    native_rank = {(hit.entry_id, hit.entry_version_id): rank for rank, hit in enumerate(native.hits)}
+    bodies = [record.entry.text.partition("\n") for record in page.entries]
+    frequencies = [Counter(_pdf_terms(body or identifier)) for identifier, _, body in bodies]
+    lengths = [sum(counts.values()) for counts in frequencies]
+    average = sum(lengths) / len(lengths) or 1
+    document_frequency = Counter(term for counts in frequencies for term in weighted if term in counts)
     inverse = {
-        term: math.log(1 + (len(candidates) - document_frequency[term] + 0.5) / (document_frequency[term] + 0.5))
-        for term in terms
+        term: math.log(1 + (len(frequencies) - document_frequency[term] + 0.5) / (document_frequency[term] + 0.5))
+        for term in weighted
     }
+    question_slug = re.sub(r"[^a-z0-9]", "", question.casefold())
+    years = re.findall(r"(?:fy)?((?:19|20)\d{2})", question.casefold())
+    requested_year = max(years, default="")
 
-    def score(key):
-        counts = frequencies[key]
-        normalization = 1.2 * (0.25 + 0.75 * lengths[key] / average)
-        return sum(
-            inverse[term] * counts[term] * 2.2 / (counts[term] + normalization) for term in terms if counts[term]
+    def score(index: int) -> float:
+        counts = frequencies[index]
+        normalization = 1.2 * (0.45 + 0.55 * lengths[index] / average)
+        lexical = sum(
+            weighted[term] * inverse[term] * counts[term] * 2.2 / (counts[term] + normalization)
+            for term in weighted
+            if counts[term]
         )
+        identifier = bodies[index][0].casefold()
+        company = re.split(r"(?:19|20)\d{2}", identifier, maxsplit=1)[0]
+        company_slug = re.sub(r"[^a-z0-9]", "", company)
+        if len(company_slug) >= 2 and company_slug in question_slug:
+            lexical *= 3.0
+        if requested_year and requested_year in identifier:
+            lexical *= 1.3
+        record = page.entries[index]
+        rank = native_rank.get((record.entry.entry_id, record.entry.entry_version_id))
+        return lexical + (0 if rank is None else 0.1 / (rank + 1))
 
-    ordered = sorted(candidates, key=lambda key: (-score(key), key))
-    return tuple(
-        MemoryCitation(memory_ref=candidates[key].memory_ref, entry_id=key[2], entry_version_id=key[3])
-        for key in ordered[:limit]
-    )
+    order = sorted(range(len(page.entries)), key=lambda index: (-score(index), index))
+    return tuple(page.entries[index].citation for index in order[:limit] if score(index) > 0)
 
 
 __all__ = ["PDF_PAGE_SOURCE_DEFINITION", "PDFDocumentInput", "PDFPageInput", "parse_pdf_document", "search_pdf_pages"]
